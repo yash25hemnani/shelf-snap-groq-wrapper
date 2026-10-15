@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { GoogleGenAI } from "@google/genai";
+import Groq from "groq-sdk";
 import {
   MODEL_NAME,
   RESPONSE_SCHEMA,
@@ -8,17 +8,21 @@ import {
 import { logger } from "../utils/logger";
 import { Book, IdentifyBooksRequestBody } from "../types/books.types";
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
-if (!GEMINI_API_KEY) {
-  logger.error("Missing GEMINI_API_KEY in .env — refusing to start.");
+if (!GROQ_API_KEY) {
+  logger.error("Missing GROQ_API_KEY in .env — refusing to start.");
   process.exit(1);
 }
 
-const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+const groq = new Groq({ apiKey: GROQ_API_KEY });
+
+const SYSTEM_PROMPT = `You identify books from bookshelf OCR data. Respond
+only with a JSON object matching this JSON Schema:
+${JSON.stringify(RESPONSE_SCHEMA)}`;
 
 // Spatial reasoning (bounding boxes) is passed as raw JSON rather than
-// pre-grouped on our end, since Gemini is better at fuzzy-matching garbled
+// pre-grouped on our end, since the LLM is better at fuzzy-matching garbled
 // OCR text to real titles/authors than a geometric clustering heuristic.
 function buildPrompt({
   imageWidth,
@@ -46,6 +50,15 @@ DATA:
 ${JSON.stringify({ imageWidth, imageHeight, blocks })}`;
 }
 
+function isBook(value: unknown): value is Book {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as Book).title === "string" &&
+    typeof (value as Book).author === "string"
+  );
+}
+
 export async function identifyBooks(req: Request, res: Response) {
   const { imageWidth, imageHeight, blocks } = req.body ?? {};
 
@@ -62,49 +75,61 @@ export async function identifyBooks(req: Request, res: Response) {
   );
 
   try {
-    const geminiStart = Date.now();
-    const response = await ai.models.generateContent({
+    const groqStart = Date.now();
+    const completion = await groq.chat.completions.create({
       model: MODEL_NAME,
-      contents: buildPrompt({
-        imageWidth,
-        imageHeight,
-        blocks,
-      } as Required<IdentifyBooksRequestBody>),
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: RESPONSE_SCHEMA,
-      },
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        {
+          role: "user",
+          content: buildPrompt({
+            imageWidth,
+            imageHeight,
+            blocks,
+          } as Required<IdentifyBooksRequestBody>),
+        },
+      ],
+      response_format: { type: "json_object" },
     });
     logger.info(
-      { durationMs: Date.now() - geminiStart },
-      "Gemini call completed",
+      { durationMs: Date.now() - groqStart },
+      "Groq call completed",
     );
 
-    // responseSchema constrains Gemini's output, but doesn't guarantee
-    // well-formed JSON, so we still guard the parse.
-    let books: Book[];
+    // JSON object mode guarantees syntactically valid JSON but not that it
+    // matches RESPONSE_SCHEMA, so we still guard the parse and the shape.
+    const responseText = completion.choices[0]?.message?.content ?? "";
+    let parsed: { books?: unknown };
     try {
-      books = JSON.parse(response.text ?? "");
+      parsed = JSON.parse(responseText);
     } catch (err) {
       logger.error(
-        { responseText: response.text },
-        "Failed to parse Gemini response as JSON",
+        { responseText },
+        "Failed to parse Groq response as JSON",
       );
-      return res.status(502).json({ error: "Gemini returned malformed JSON" });
+      return res.status(502).json({ error: "Groq returned malformed JSON" });
     }
 
-    if (!Array.isArray(books)) {
-      logger.error({ books }, "Gemini response was not an array");
+    if (!Array.isArray(parsed?.books)) {
+      logger.error({ parsed }, "Groq response had no books array");
       return res
         .status(502)
-        .json({ error: "Gemini response was not an array" });
+        .json({ error: "Groq response had no books array" });
+    }
+
+    const books: Book[] = parsed.books.filter(isBook);
+    if (books.length !== parsed.books.length) {
+      logger.warn(
+        { dropped: parsed.books.length - books.length },
+        "Dropped malformed book entries from Groq response",
+      );
     }
 
     logger.info({ bookCount: books.length }, "identifyBooks succeeded");
     res.json({ books });
   } catch (err) {
-    logger.error({ err }, "Gemini call failed");
-    res.status(502).json({ error: "Failed to reach Gemini API" });
+    logger.error({ err }, "Groq call failed");
+    res.status(502).json({ error: "Failed to reach Groq API" });
   }
 }
 

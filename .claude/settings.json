@@ -22,7 +22,9 @@
       "Bash(node -e \"console.log\\('resolved entry:', require.resolve\\('jose'\\)\\);\")",
       "Bash(node -e \"console.log\\(require.resolve\\('jose', { paths: ['node_modules/jwks-rsa'] }\\)\\)\")",
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "WebFetch(domain:console.groq.com)",
+      "PowerShell(Rename-Item -LiteralPath \"C:\\\\Users\\\\it\\\\Desktop\\\\Projects\\\\shelf-snap-gemini-wrapper\" -NewName \"shelf-snap-groq-wrapper\" -ErrorAction Stop)"
     ]
   }
 }
