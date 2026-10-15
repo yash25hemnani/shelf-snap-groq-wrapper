@@ -4,6 +4,8 @@ import {
   MODEL_NAME,
   RESPONSE_SCHEMA,
   MAX_BLOCKS,
+  ALLOWED_IMAGE_MIME_TYPES,
+  MAX_IMAGE_BASE64_LENGTH,
 } from "../constants/books.constants";
 import { logger } from "../utils/logger";
 import { Book, IdentifyBooksRequestBody } from "../types/books.types";
@@ -17,37 +19,37 @@ if (!GROQ_API_KEY) {
 
 const groq = new Groq({ apiKey: GROQ_API_KEY });
 
-const SYSTEM_PROMPT = `You identify books from bookshelf OCR data. Respond
-only with a JSON object matching this JSON Schema:
+const SYSTEM_PROMPT = `You identify books from photos of bookshelves.
+Respond only with a JSON object matching this JSON Schema:
 ${JSON.stringify(RESPONSE_SCHEMA)}`;
 
-// Spatial reasoning (bounding boxes) is passed as raw JSON rather than
-// pre-grouped on our end, since the LLM is better at fuzzy-matching garbled
-// OCR text to real titles/authors than a geometric clustering heuristic.
+// The photo is the primary source; on-device OCR blocks ride along as hints
+// since they're cheap and sometimes catch small text the model misreads.
 function buildPrompt({
   imageWidth,
   imageHeight,
   blocks,
-}: IdentifyBooksRequestBody): string {
-  return `You're given OCR text blocks from a photo of a bookshelf. Each
-block has raw (often garbled) text and a bounding box in pixel
-coordinates, within an image of size ${imageWidth}x${imageHeight}.
+}: Omit<IdentifyBooksRequestBody, "image" | "imageMimeType">): string {
+  const hints = blocks.length
+    ? `OCR HINTS (bounding boxes in a ${imageWidth}x${imageHeight} coordinate
+space; text is often garbled — trust the photo over these):
+${JSON.stringify(blocks)}`
+    : "No OCR hints were available for this photo.";
 
-Books stand vertically, so one book's title may be split across multiple
-blocks, and a short author/imprint line is often printed horizontally
-near the bottom of the same spine — use spatial proximity (overlapping or
-adjacent x-ranges) to decide which blocks belong to the same physical
-book.
+  return `The attached photo shows books on a shelf. Identify each book
+whose spine or cover you can see.
 
-OCR is frequently garbled (misread letters, merged words, missing
-spaces). Use your knowledge of real book titles and authors to infer the
-most likely intended title and author for each group, even if the raw
-text doesn't exactly match.
+Spines are usually vertical, so read rotated text. Titles may be split
+across lines, and the author or publisher is often printed separately
+near the top or bottom of the same spine.
 
-If you can't confidently identify a group, omit it rather than guessing.
+Use your knowledge of real books to correct partially readable text, but
+only list a book if you can actually read enough of its spine to be sure.
+Never add books that aren't in the photo. Skip spines that are blurry,
+cut off, or unreadable rather than guessing. If the author isn't visible
+and you're not sure who wrote it, use an empty string.
 
-DATA:
-${JSON.stringify({ imageWidth, imageHeight, blocks })}`;
+${hints}`;
 }
 
 function isBook(value: unknown): value is Book {
@@ -60,17 +62,32 @@ function isBook(value: unknown): value is Book {
 }
 
 export async function identifyBooks(req: Request, res: Response) {
-  const { imageWidth, imageHeight, blocks } = req.body ?? {};
+  const { image, imageMimeType, imageWidth, imageHeight } = req.body ?? {};
+  const blocks = req.body?.blocks ?? [];
 
-  if (!Array.isArray(blocks) || blocks.length === 0) {
-    return res.status(400).json({ error: "blocks must be a non-empty array" });
+  if (typeof image !== "string" || image.length === 0) {
+    return res.status(400).json({ error: "image must be a base64 string" });
+  }
+  if (image.length > MAX_IMAGE_BASE64_LENGTH) {
+    return res.status(413).json({ error: "Image too large" });
+  }
+  if (!ALLOWED_IMAGE_MIME_TYPES.includes(imageMimeType)) {
+    return res.status(400).json({ error: "Unsupported imageMimeType" });
+  }
+  if (!Array.isArray(blocks)) {
+    return res.status(400).json({ error: "blocks must be an array" });
   }
   if (blocks.length > MAX_BLOCKS) {
     return res.status(400).json({ error: "Too many blocks in one request" });
   }
 
   logger.info(
-    { blockCount: blocks.length, imageWidth, imageHeight },
+    {
+      blockCount: blocks.length,
+      imageKb: Math.round((image.length * 3) / 4 / 1024),
+      imageWidth,
+      imageHeight,
+    },
     "identify-books request received",
   );
 
@@ -82,11 +99,16 @@ export async function identifyBooks(req: Request, res: Response) {
         { role: "system", content: SYSTEM_PROMPT },
         {
           role: "user",
-          content: buildPrompt({
-            imageWidth,
-            imageHeight,
-            blocks,
-          } as Required<IdentifyBooksRequestBody>),
+          content: [
+            {
+              type: "text",
+              text: buildPrompt({ imageWidth, imageHeight, blocks }),
+            },
+            {
+              type: "image_url",
+              image_url: { url: `data:${imageMimeType};base64,${image}` },
+            },
+          ],
         },
       ],
       response_format: { type: "json_object" },

@@ -4,6 +4,8 @@ export interface OcrBlock {
 }
 
 export interface IdentifyBooksRequestBody {
+  image: string; // base64, no data: prefix
+  imageMimeType: string;
   imageWidth: number;
   imageHeight: number;
   blocks: OcrBlock[];
