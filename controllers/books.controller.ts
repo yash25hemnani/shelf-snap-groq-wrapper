@@ -2,20 +2,22 @@ import { Request, Response } from "express";
 import Groq from "groq-sdk";
 import {
   MODEL_NAME,
-  RESPONSE_SCHEMA,
+  SYSTEM_PROMPT,
   MAX_BLOCKS,
+  MIN_QUERY_LENGTH,
+  MAX_QUERY_LENGTH,
   ALLOWED_IMAGE_MIME_TYPES,
   MAX_IMAGE_BASE64_LENGTH,
   STRONG_MATCH_THRESHOLD,
 } from "../constants/books.constants";
 import { logger } from "../utils/logger";
-import { searchBooks } from "../services/google-books.service";
-import { scoreAndRank } from "../services/match-scoring.service";
+import { buildPrompt } from "../utils/prompts";
 import {
-  Book,
-  IdentifyBooksRequestBody,
-  ScoredBook,
-} from "../types/books.types";
+  searchBooksByQuery,
+  searchWithRetryLadder,
+} from "../services/google-books.service";
+import { scoreAndRank } from "../services/match-scoring.service";
+import { Book, ScoredBook } from "../types/books.types";
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
@@ -26,39 +28,6 @@ if (!GROQ_API_KEY) {
 
 const groq = new Groq({ apiKey: GROQ_API_KEY });
 
-const SYSTEM_PROMPT = `You identify books from photos of bookshelves.
-Respond only with a JSON object matching this JSON Schema:
-${JSON.stringify(RESPONSE_SCHEMA)}`;
-
-// The photo is the primary source; on-device OCR blocks ride along as hints
-// since they're cheap and sometimes catch small text the model misreads.
-function buildPrompt({
-  imageWidth,
-  imageHeight,
-  blocks,
-}: Omit<IdentifyBooksRequestBody, "image" | "imageMimeType">): string {
-  const hints = blocks.length
-    ? `OCR HINTS (bounding boxes in a ${imageWidth}x${imageHeight} coordinate
-space; text is often garbled — trust the photo over these):
-${JSON.stringify(blocks)}`
-    : "No OCR hints were available for this photo.";
-
-  return `The attached photo shows books on a shelf. Identify each book
-whose spine or cover you can see.
-
-Spines are usually vertical, so read rotated text. Titles may be split
-across lines, and the author or publisher is often printed separately
-near the top or bottom of the same spine.
-
-Use your knowledge of real books to correct partially readable text, but
-only list a book if you can actually read enough of its spine to be sure.
-Never add books that aren't in the photo. Skip spines that are blurry,
-cut off, or unreadable rather than guessing. If the author isn't visible
-and you're not sure who wrote it, use an empty string.
-
-${hints}`;
-}
-
 function isBook(value: unknown): value is Book {
   return (
     typeof value === "object" &&
@@ -66,6 +35,29 @@ function isBook(value: unknown): value is Book {
     typeof (value as Book).title === "string" &&
     typeof (value as Book).author === "string"
   );
+}
+
+export async function searchBooks(req: Request, res: Response) {
+  const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+
+  if (q.length < MIN_QUERY_LENGTH) {
+    return res
+      .status(400)
+      .json({ error: `q must be at least ${MIN_QUERY_LENGTH} characters` });
+  }
+  if (q.length > MAX_QUERY_LENGTH) {
+    return res
+      .status(400)
+      .json({ error: `q must be at most ${MAX_QUERY_LENGTH} characters` });
+  }
+
+  try {
+    const books = await searchBooksByQuery(q);
+    res.json({ books });
+  } catch (err) {
+    logger.error({ err, q }, "search-books failed");
+    res.status(502).json({ error: "Failed to reach Google Books" });
+  }
 }
 
 export async function identifyBooks(req: Request, res: Response) {
@@ -120,22 +112,19 @@ export async function identifyBooks(req: Request, res: Response) {
       ],
       response_format: { type: "json_object" },
     });
+    const responseText = completion.choices[0]?.message?.content ?? "";
     logger.info(
-      { durationMs: Date.now() - groqStart },
+      { durationMs: Date.now() - groqStart, responseText },
       "Groq call completed",
     );
 
     // JSON object mode guarantees syntactically valid JSON but not that it
     // matches RESPONSE_SCHEMA, so we still guard the parse and the shape.
-    const responseText = completion.choices[0]?.message?.content ?? "";
     let parsed: { books?: unknown };
     try {
       parsed = JSON.parse(responseText);
     } catch (err) {
-      logger.error(
-        { responseText },
-        "Failed to parse Groq response as JSON",
-      );
+      logger.error({ responseText }, "Failed to parse Groq response as JSON");
       return res.status(502).json({ error: "Groq returned malformed JSON" });
     }
 
@@ -188,7 +177,7 @@ async function lookUpBook({ title, author }: Book): Promise<ScoredBook | null> {
 
   let candidates;
   try {
-    candidates = await searchBooks(query);
+    candidates = await searchWithRetryLadder(query);
   } catch (err) {
     logger.warn({ query, err }, "Google Books lookup failed");
     return null;

@@ -3,6 +3,10 @@ export const MODEL_NAME = 'qwen/qwen3.8-27b';
 
 export const MAX_BLOCKS = 200;
 
+// Bounds for the user-typed search-books query.
+export const MIN_QUERY_LENGTH = 2;
+export const MAX_QUERY_LENGTH = 200;
+
 // Top Google Books match must score at least this well to be returned.
 // Correct matches usually score ~1.0; wrong ones observed so far ~0.5.
 export const STRONG_MATCH_THRESHOLD = 0.6;
@@ -32,3 +36,7 @@ export const RESPONSE_SCHEMA = {
   },
   required: ['books'],
 };
+
+export const SYSTEM_PROMPT = `You identify books from photos of bookshelves.
+Respond only with a JSON object matching this JSON Schema:
+${JSON.stringify(RESPONSE_SCHEMA)}`;

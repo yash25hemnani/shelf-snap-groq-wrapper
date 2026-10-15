@@ -11,13 +11,22 @@ if (!GOOGLE_BOOKS_API_KEY) {
   process.exit(1);
 }
 
+/** Single Google Books search for user-typed queries (no retry ladder). */
+export async function searchBooksByQuery(
+  query: string,
+): Promise<BookDetails[]> {
+  return querySingle(query);
+}
+
 /**
  * Searches Google Books for [query] ("title" or "title author"), using a
  * "retry ladder": if the full query returns nothing, trailing words are
  * dropped one at a time, since the title at the front is the most reliable
  * part. Returns an empty list if no variant returns results.
  */
-export async function searchBooks(query: string): Promise<BookDetails[]> {
+export async function searchWithRetryLadder(
+  query: string,
+): Promise<BookDetails[]> {
   const words = query.trim().split(/\s+/).filter(Boolean);
 
   for (let len = words.length; len >= 1; len--) {
@@ -33,7 +42,9 @@ async function querySingle(query: string): Promise<BookDetails[]> {
   const url = `${BASE_URL}?q=${encodeURIComponent(query)}&key=${GOOGLE_BOOKS_API_KEY}`;
 
   let response = await fetch(url);
-  if (isTransient(response.status)) {
+  // 429 (rate limited) and 5xx are usually transient; parallel lookups make
+  // 429s likely, and retrying keeps a real book from being dropped.
+  if (response.status === 429 || response.status >= 500) {
     logger.warn({ query, status: response.status }, "Google Books retry");
     await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
     response = await fetch(url);
@@ -46,10 +57,6 @@ async function querySingle(query: string): Promise<BookDetails[]> {
 
   const data = (await response.json()) as { items?: GoogleBooksItem[] };
   return (data.items ?? []).map(parseItem);
-}
-
-function isTransient(status: number): boolean {
-  return status === 429 || status >= 500;
 }
 
 interface GoogleBooksItem {
