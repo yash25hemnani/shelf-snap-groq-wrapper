@@ -6,9 +6,16 @@ import {
   MAX_BLOCKS,
   ALLOWED_IMAGE_MIME_TYPES,
   MAX_IMAGE_BASE64_LENGTH,
+  STRONG_MATCH_THRESHOLD,
 } from "../constants/books.constants";
 import { logger } from "../utils/logger";
-import { Book, IdentifyBooksRequestBody } from "../types/books.types";
+import { searchBooks } from "../services/google-books.service";
+import { scoreAndRank } from "../services/match-scoring.service";
+import {
+  Book,
+  IdentifyBooksRequestBody,
+  ScoredBook,
+} from "../types/books.types";
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
@@ -139,20 +146,83 @@ export async function identifyBooks(req: Request, res: Response) {
         .json({ error: "Groq response had no books array" });
     }
 
-    const books: Book[] = parsed.books.filter(isBook);
-    if (books.length !== parsed.books.length) {
+    const identified: Book[] = parsed.books
+      .filter(isBook)
+      .filter((b) => b.title.trim().length > 0);
+    if (identified.length !== parsed.books.length) {
       logger.warn(
-        { dropped: parsed.books.length - books.length },
+        { dropped: parsed.books.length - identified.length },
         "Dropped malformed book entries from Groq response",
       );
     }
 
-    logger.info({ bookCount: books.length }, "identifyBooks succeeded");
+    // Lookups run in parallel; a failed one only drops that book.
+    const lookupStart = Date.now();
+    const matches = await Promise.all(identified.map(lookUpBook));
+    const books = dedupeByTitle(
+      matches.filter((m): m is ScoredBook => m !== null),
+    );
+    logger.info(
+      { durationMs: Date.now() - lookupStart },
+      "Google Books lookups completed",
+    );
+
+    logger.info(
+      { identifiedCount: identified.length, bookCount: books.length },
+      "identifyBooks succeeded",
+    );
     res.json({ books });
   } catch (err) {
     logger.error({ err }, "Groq call failed");
     res.status(502).json({ error: "Failed to reach Groq API" });
   }
+}
+
+/**
+ * Finds the best Google Books listing for an identified book. Returns null
+ * (and logs why) if the lookup fails, finds nothing, or the best match is
+ * too weak to trust.
+ */
+async function lookUpBook({ title, author }: Book): Promise<ScoredBook | null> {
+  const query = author ? `${title} ${author}` : title;
+
+  let candidates;
+  try {
+    candidates = await searchBooks(query);
+  } catch (err) {
+    logger.warn({ query, err }, "Google Books lookup failed");
+    return null;
+  }
+
+  const [topMatch] = scoreAndRank(title, author, candidates);
+  if (!topMatch) {
+    logger.info({ query }, "No Google Books match");
+    return null;
+  }
+  if (topMatch.score < STRONG_MATCH_THRESHOLD) {
+    logger.info(
+      {
+        query,
+        matchTitle: topMatch.title,
+        matchAuthor: topMatch.author,
+        score: Number(topMatch.score.toFixed(2)),
+      },
+      "Rejected weak match",
+    );
+    return null;
+  }
+  return topMatch;
+}
+
+/** Two spines can resolve to the same listing; keep the higher score. */
+function dedupeByTitle(books: ScoredBook[]): ScoredBook[] {
+  const byTitle = new Map<string, ScoredBook>();
+  for (const book of books) {
+    const key = book.title.toLowerCase();
+    const existing = byTitle.get(key);
+    if (!existing || book.score > existing.score) byTitle.set(key, book);
+  }
+  return [...byTitle.values()];
 }
 
 export function getHealth(req: Request, res: Response) {

@@ -18,6 +18,7 @@
     "api/**/*.ts",
     "routes/**/*.ts",
     "controllers/**/*.ts",
+    "services/**/*.ts",
     "types/**/*.ts",
     "constants/**/*.ts",
     "config/**/*.ts",

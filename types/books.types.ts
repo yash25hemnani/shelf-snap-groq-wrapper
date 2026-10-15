@@ -11,7 +11,20 @@ export interface IdentifyBooksRequestBody {
   blocks: OcrBlock[];
 }
 
+/** A book as identified by the vision model, before lookup. */
 export interface Book {
   title: string;
   author: string;
+}
+
+/** A Google Books listing. */
+export interface BookDetails {
+  title: string;
+  author: string | null;
+  isbn: string | null;
+  coverUrl: string | null;
+}
+
+export interface ScoredBook extends BookDetails {
+  score: number; // 0–1 similarity to the identified book
 }
