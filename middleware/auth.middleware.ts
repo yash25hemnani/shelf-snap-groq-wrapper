@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import { getAuth } from "firebase-admin/auth";
 import firebaseApp from "../config/firebase";
 import { logger } from "../utils/logger";
+import { sendError } from "../utils/response";
 
 const auth = getAuth(firebaseApp);
 
@@ -12,7 +13,7 @@ export async function verifyFirebaseToken(
 ) {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith("Bearer ")) {
-    return res.status(401).json({ error: "Unauthorized" });
+    return sendError(res, 401, "Unauthorized");
   }
 
   try {
@@ -20,6 +21,6 @@ export async function verifyFirebaseToken(
     next();
   } catch (err) {
     logger.warn({ err }, "Firebase ID token verification failed");
-    res.status(401).json({ error: "Unauthorized" });
+    sendError(res, 401, "Unauthorized");
   }
 }

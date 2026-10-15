@@ -57,10 +57,10 @@ Each block must have a `text` field; any other fields (e.g. bounding box coordin
 **Response**
 
 ```json
-{ "books": [{ "title": "The Great Gatsby", "author": "F. Scott Fitzgerald" }] }
+{ "data": { "books": [{ "title": "The Great Gatsby", "author": "F. Scott Fitzgerald" }] } }
 ```
 
-On failure: `{ "error": "..." }` with a `400`, `401`, or `502` status.
+On failure: `{ "error": { "message": "..." } }` with a `400`, `401`, `413`, or `502` status. Every endpoint uses these two shapes (see [utils/response.ts](utils/response.ts)).
 
 ## Notes
 
