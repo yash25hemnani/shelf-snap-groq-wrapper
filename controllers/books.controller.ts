@@ -12,7 +12,6 @@ import {
 } from "../constants/books.constants";
 import { logger } from "../utils/logger";
 import { buildPrompt } from "../utils/prompts";
-import { sendError, sendSuccess } from "../utils/response";
 import {
   searchBooksByQuery,
   searchWithRetryLadder,
@@ -42,26 +41,22 @@ export async function searchBooks(req: Request, res: Response) {
   const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
 
   if (q.length < MIN_QUERY_LENGTH) {
-    return sendError(
-      res,
-      400,
-      `q must be at least ${MIN_QUERY_LENGTH} characters`,
-    );
+    return res
+      .status(400)
+      .json({ error: `q must be at least ${MIN_QUERY_LENGTH} characters` });
   }
   if (q.length > MAX_QUERY_LENGTH) {
-    return sendError(
-      res,
-      400,
-      `q must be at most ${MAX_QUERY_LENGTH} characters`,
-    );
+    return res
+      .status(400)
+      .json({ error: `q must be at most ${MAX_QUERY_LENGTH} characters` });
   }
 
   try {
     const books = await searchBooksByQuery(q);
-    sendSuccess(res, { books });
+    res.json({ books });
   } catch (err) {
     logger.error({ err, q }, "search-books failed");
-    sendError(res, 502, "Failed to reach Google Books");
+    res.status(502).json({ error: "Failed to reach Google Books" });
   }
 }
 
@@ -70,19 +65,19 @@ export async function identifyBooks(req: Request, res: Response) {
   const blocks = req.body?.blocks ?? [];
 
   if (typeof image !== "string" || image.length === 0) {
-    return sendError(res, 400, "image must be a base64 string");
+    return res.status(400).json({ error: "image must be a base64 string" });
   }
   if (image.length > MAX_IMAGE_BASE64_LENGTH) {
-    return sendError(res, 413, "Image too large");
+    return res.status(413).json({ error: "Image too large" });
   }
   if (!ALLOWED_IMAGE_MIME_TYPES.includes(imageMimeType)) {
-    return sendError(res, 400, "Unsupported imageMimeType");
+    return res.status(400).json({ error: "Unsupported imageMimeType" });
   }
   if (!Array.isArray(blocks)) {
-    return sendError(res, 400, "blocks must be an array");
+    return res.status(400).json({ error: "blocks must be an array" });
   }
   if (blocks.length > MAX_BLOCKS) {
-    return sendError(res, 400, "Too many blocks in one request");
+    return res.status(400).json({ error: "Too many blocks in one request" });
   }
 
   logger.info(
@@ -130,12 +125,14 @@ export async function identifyBooks(req: Request, res: Response) {
       parsed = JSON.parse(responseText);
     } catch (err) {
       logger.error({ responseText }, "Failed to parse Groq response as JSON");
-      return sendError(res, 502, "Groq returned malformed JSON");
+      return res.status(502).json({ error: "Groq returned malformed JSON" });
     }
 
     if (!Array.isArray(parsed?.books)) {
       logger.error({ parsed }, "Groq response had no books array");
-      return sendError(res, 502, "Groq response had no books array");
+      return res
+        .status(502)
+        .json({ error: "Groq response had no books array" });
     }
 
     const identified: Book[] = parsed.books
@@ -163,10 +160,10 @@ export async function identifyBooks(req: Request, res: Response) {
       { identifiedCount: identified.length, bookCount: books.length },
       "identifyBooks succeeded",
     );
-    sendSuccess(res, { books });
+    res.json({ books });
   } catch (err) {
     logger.error({ err }, "Groq call failed");
-    sendError(res, 502, "Failed to reach Groq API");
+    res.status(502).json({ error: "Failed to reach Groq API" });
   }
 }
 
@@ -218,5 +215,5 @@ function dedupeByTitle(books: ScoredBook[]): ScoredBook[] {
 }
 
 export function getHealth(req: Request, res: Response) {
-  sendSuccess(res, { status: "ok" });
+  res.json({ status: "ok" });
 }
