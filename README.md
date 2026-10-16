@@ -22,6 +22,7 @@ Create a `.env` file in the project root:
 | `FIREBASE_PROJECT_ID`  | yes      | Firebase project ID for the service account used to verify ID tokens.         |
 | `FIREBASE_CLIENT_EMAIL`| yes      | Service account client email (from the Firebase service account JSON).        |
 | `FIREBASE_PRIVATE_KEY` | yes      | Service account private key. The server refuses to start without these.      |
+| `OPENLIBRARY_CONTACT`  | no       | Contact email sent in the Open Library User-Agent (raises limit to 3 req/s).  |
 | `PORT`                 | no       | Port to listen on (default `3000`).                                           |
 | `LOG_LEVEL`            | no       | Pino log level (default `info`).                                              |
 | `NODE_ENV`             | no       | Set to `production` to log structured JSON instead of pretty-printed output.  |

@@ -27,7 +27,10 @@
       "PowerShell(Rename-Item -LiteralPath \"C:\\\\Users\\\\it\\\\Desktop\\\\Projects\\\\shelf-snap-gemini-wrapper\" -NewName \"shelf-snap-groq-wrapper\" -ErrorAction Stop)",
       "PowerShell(\\(Get-Command vercel -ErrorAction SilentlyContinue\\).Source; Test-Path .vercel)",
       "PowerShell(node -e \"require\\('dotenv'\\).config\\({quiet:true}\\); const Groq=require\\('groq-sdk'\\).default; new Groq\\({apiKey:process.env.GROQ_API_KEY}\\).chat.completions.create\\({model:'openai/gpt-oss-120b',messages:[{role:'system',content:'Respond only with a JSON object {books:[{title,author}]}'},{role:'user',content:'OCR blocks: [\\\\\"HARRY POTTR AND THE PHILOSPHER\\\\\", \\\\\"ROWLNG\\\\\", \\\\\"1984 ORWEL\\\\\"]'}],response_format:{type:'json_object'}}\\).then\\(r=>console.log\\('OK',r.choices[0].message.content\\)\\).catch\\(e=>console.log\\('ERR',e.status,e.message\\)\\)\")",
-      "PowerShell(node \"C:\\\\Users\\\\it\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-it-Desktop-Projects-shelf-snap-groq-wrapper\\\\c5bb4580-aa3d-4b02-850b-f2c20ef20666\\\\scratchpad\\\\groq-test.js\" \"$PWD\")"
+      "PowerShell(node \"C:\\\\Users\\\\it\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-it-Desktop-Projects-shelf-snap-groq-wrapper\\\\c5bb4580-aa3d-4b02-850b-f2c20ef20666\\\\scratchpad\\\\groq-test.js\" \"$PWD\")",
+      "Bash(git revert *)",
+      "Bash(git remote *)",
+      "WebFetch(domain:developers.google.com)"
     ]
   }
 }

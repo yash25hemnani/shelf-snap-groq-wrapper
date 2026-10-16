@@ -17,7 +17,7 @@ export interface Book {
   author: string;
 }
 
-/** A Google Books listing. */
+/** A Google Books or Open Library listing. */
 export interface BookDetails {
   title: string;
   author: string | null;

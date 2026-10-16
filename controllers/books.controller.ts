@@ -16,6 +16,7 @@ import {
   searchBooksByQuery,
   searchWithRetryLadder,
 } from "../services/google-books.service";
+import { parseIsbn, searchByIsbn } from "../services/open-library.service";
 import { scoreAndRank } from "../services/match-scoring.service";
 import { Book, ScoredBook } from "../types/books.types";
 
@@ -35,6 +36,53 @@ function isBook(value: unknown): value is Book {
     typeof (value as Book).title === "string" &&
     typeof (value as Book).author === "string"
   );
+}
+
+/**
+ * Finds the best Google Books listing for an identified book. Returns null
+ * (and logs why) if the lookup fails, finds nothing, or the best match is
+ * too weak to trust.
+ */
+async function lookUpBook({ title, author }: Book): Promise<ScoredBook | null> {
+  const query = author ? `${title} ${author}` : title;
+
+  let candidates;
+  try {
+    candidates = await searchWithRetryLadder(query);
+  } catch (err) {
+    logger.warn({ query, err }, "Google Books lookup failed");
+    return null;
+  }
+
+  const [topMatch] = scoreAndRank(title, author, candidates);
+  if (!topMatch) {
+    logger.info({ query }, "No Google Books match");
+    return null;
+  }
+  if (topMatch.score < STRONG_MATCH_THRESHOLD) {
+    logger.info(
+      {
+        query,
+        matchTitle: topMatch.title,
+        matchAuthor: topMatch.author,
+        score: Number(topMatch.score.toFixed(2)),
+      },
+      "Rejected weak match",
+    );
+    return null;
+  }
+  return topMatch;
+}
+
+/** Two spines can resolve to the same listing; keep the higher score. */
+function dedupeByTitle(books: ScoredBook[]): ScoredBook[] {
+  const byTitle = new Map<string, ScoredBook>();
+  for (const book of books) {
+    const key = book.title.toLowerCase();
+    const existing = byTitle.get(key);
+    if (!existing || book.score > existing.score) byTitle.set(key, book);
+  }
+  return [...byTitle.values()];
 }
 
 export async function searchBooks(req: Request, res: Response) {
@@ -57,6 +105,26 @@ export async function searchBooks(req: Request, res: Response) {
   } catch (err) {
     logger.error({ err, q }, "search-books failed");
     res.status(502).json({ error: "Failed to reach Google Books" });
+  }
+}
+
+/** Google's "isbn:" filter returns nothing for us, so ISBNs go to Open Library. */
+export async function searchBookByIsbn(req: Request, res: Response) {
+  const raw = typeof req.query.isbn === "string" ? req.query.isbn : "";
+  const isbn = parseIsbn(raw);
+
+  if (!isbn) {
+    return res
+      .status(400)
+      .json({ error: "isbn must be a 10- or 13-digit ISBN" });
+  }
+
+  try {
+    const books = await searchByIsbn(isbn);
+    res.json({ books });
+  } catch (err) {
+    logger.error({ err, isbn }, "isbn-search failed");
+    res.status(502).json({ error: "Failed to reach Open Library" });
   }
 }
 
@@ -165,53 +233,6 @@ export async function identifyBooks(req: Request, res: Response) {
     logger.error({ err }, "Groq call failed");
     res.status(502).json({ error: "Failed to reach Groq API" });
   }
-}
-
-/**
- * Finds the best Google Books listing for an identified book. Returns null
- * (and logs why) if the lookup fails, finds nothing, or the best match is
- * too weak to trust.
- */
-async function lookUpBook({ title, author }: Book): Promise<ScoredBook | null> {
-  const query = author ? `${title} ${author}` : title;
-
-  let candidates;
-  try {
-    candidates = await searchWithRetryLadder(query);
-  } catch (err) {
-    logger.warn({ query, err }, "Google Books lookup failed");
-    return null;
-  }
-
-  const [topMatch] = scoreAndRank(title, author, candidates);
-  if (!topMatch) {
-    logger.info({ query }, "No Google Books match");
-    return null;
-  }
-  if (topMatch.score < STRONG_MATCH_THRESHOLD) {
-    logger.info(
-      {
-        query,
-        matchTitle: topMatch.title,
-        matchAuthor: topMatch.author,
-        score: Number(topMatch.score.toFixed(2)),
-      },
-      "Rejected weak match",
-    );
-    return null;
-  }
-  return topMatch;
-}
-
-/** Two spines can resolve to the same listing; keep the higher score. */
-function dedupeByTitle(books: ScoredBook[]): ScoredBook[] {
-  const byTitle = new Map<string, ScoredBook>();
-  for (const book of books) {
-    const key = book.title.toLowerCase();
-    const existing = byTitle.get(key);
-    if (!existing || book.score > existing.score) byTitle.set(key, book);
-  }
-  return [...byTitle.values()];
 }
 
 export function getHealth(req: Request, res: Response) {
